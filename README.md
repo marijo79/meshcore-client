@@ -8,7 +8,9 @@ Python CLI for sending and receiving messages over a MeshCore companion radio co
 - Python 3.12+, dependencies installed in `.venv`
 
 ```bash
-pip install meshcore meshcore-cli
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
 ## Usage
@@ -67,10 +69,51 @@ All received messages are appended to `messages.jsonl` in the project directory,
 
 > **Note:** Only one process can hold the serial port at a time. Make sure no other instance of `main.py` is running before starting `recv`.
 
-## Device
+## Configuration
 
-The device connects on `/dev/ttyACM0` at 115200 baud. The ESP32-S3 resets on every USB serial open, so the script waits 2.5 seconds after connecting before sending the first command. Edit `PORT` or the sleep duration at the top of `main.py` if needed.
+All tunables live in `.env` in the project root. Copy and edit as needed:
+
+```bash
+cp .env .env.local  # optional — .env is already read directly
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `MESHCORE_PORT` | `/dev/ttyACM0` | Serial port the companion radio is connected to |
+| `MESHCORE_BAUDRATE` | `115200` | Baud rate (must match firmware) |
+| `MESHCORE_CHANNEL` | `#mv` | Channel name used by `setup`, `send`, and `recv` |
+| `MESHCORE_CHANNEL_KEY` | *(none)* | Encryption key as a 32-char hex string (16 bytes). Required for channels whose name does not start with `#`. |
+| `MESHCORE_LOG_FILE` | `messages.jsonl` | Path to the message log; relative paths resolve from the project root |
+| `MESHCORE_CONNECT_WAIT` | `2.5` | Seconds to wait after the ESP32-S3 USB-triggered reset before sending commands |
+
+### Channel key behaviour
+
+- **`#`-prefixed channels** (e.g. `#mv`): the key is derived automatically from the channel name via SHA-256. Leave `MESHCORE_CHANNEL_KEY` unset.
+- **Named channels** (e.g. `Public`): you must supply the matching 32-char hex key so the device uses the same key as other nodes on that channel.
+
+```bash
+# Join the MeshCore default "Public" channel
+MESHCORE_CHANNEL=Public
+MESHCORE_CHANNEL_KEY=<32-char hex key for Public>
+```
+
+Shell environment variables always take precedence over `.env`:
+
+```bash
+MESHCORE_PORT=/dev/ttyUSB0 python -u main.py recv
+```
+
+To find which port the device is on:
+
+```bash
+ls /dev/tty{ACM,USB}*
+# or
+dmesg | grep tty | tail -5
+```
+
+The ESP32-S3 resets on every USB serial open, so the script waits `MESHCORE_CONNECT_WAIT` seconds after connecting before sending the first command.
 
 If you get `ERROR: Device did not respond to appstart`, check that:
 1. No other process is holding the port (`fuser /dev/ttyACM0`)
 2. The device is flashed with companion firmware (not repeater/router firmware)
+3. Try increasing `MESHCORE_CONNECT_WAIT` to `4.0` or higher on slow hardware

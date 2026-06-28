@@ -1,18 +1,32 @@
 import asyncio
 import json
-import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 import serial_asyncio_fast as serial_asyncio
+from dotenv import load_dotenv
 from meshcore import MeshCore
 from meshcore.serial_cx import SerialConnection
 from meshcore.events import EventType
 
-PORT = "/dev/ttyACM0"
-BAUDRATE = 115200
-CHANNEL_NAME = "#mv"
-LOG_FILE = Path(__file__).parent / "messages.jsonl"
+load_dotenv(Path(__file__).parent / ".env")
+
+PORT         = os.environ.get("MESHCORE_PORT", "/dev/ttyACM0")
+BAUDRATE     = int(os.environ.get("MESHCORE_BAUDRATE", "115200"))
+CHANNEL_NAME = os.environ.get("MESHCORE_CHANNEL", "#mv")
+CONNECT_WAIT = float(os.environ.get("MESHCORE_CONNECT_WAIT", "2.5"))
+_log_path    = os.environ.get("MESHCORE_LOG_FILE", "messages.jsonl")
+LOG_FILE     = Path(_log_path) if Path(_log_path).is_absolute() else Path(__file__).parent / _log_path
+
+_key_hex     = os.environ.get("MESHCORE_CHANNEL_KEY")
+if _key_hex:
+    if len(_key_hex) != 32:
+        print(f"ERROR: MESHCORE_CHANNEL_KEY must be exactly 32 hex characters (16 bytes), got {len(_key_hex)}")
+        sys.exit(1)
+    CHANNEL_KEY: bytes | None = bytes.fromhex(_key_hex)
+else:
+    CHANNEL_KEY = None
 
 
 class NoDTRSerialConnection(SerialConnection):
@@ -30,7 +44,7 @@ class NoDTRSerialConnection(SerialConnection):
             dsrdtr=False,
         )
         await asyncio.wait_for(self._connected_event.wait(), timeout=timeout)
-        await asyncio.sleep(2.5)  # wait for ESP32-S3 reset + boot to finish
+        await asyncio.sleep(CONNECT_WAIT)  # wait for ESP32-S3 reset + boot to finish
         return self.port
 
 
@@ -44,7 +58,7 @@ async def connect() -> MeshCore:
     return mc
 
 
-async def find_or_add_channel(mc: MeshCore, name: str) -> int:
+async def find_or_add_channel(mc: MeshCore, name: str, key: bytes | None = None) -> int:
     """Return the channel index for `name`, creating it if not found."""
     for idx in range(8):
         event = await mc.commands.get_channel(idx)
@@ -55,8 +69,9 @@ async def find_or_add_channel(mc: MeshCore, name: str) -> int:
                 print(f"Channel '{name}' already exists at slot {idx}")
                 return idx
             if not ch_name:
-                print(f"Adding channel '{name}' at slot {idx}")
-                await mc.commands.set_channel(idx, name)
+                key_note = f" (custom key)" if key else ""
+                print(f"Adding channel '{name}' at slot {idx}{key_note}")
+                await mc.commands.set_channel(idx, name, key)
                 return idx
     print(f"ERROR: No free channel slots (checked 0-7)")
     sys.exit(1)
@@ -194,7 +209,7 @@ async def main():
         await list_channels(mc)
 
     elif cmd == "setup":
-        chan_idx = await find_or_add_channel(mc, CHANNEL_NAME)
+        chan_idx = await find_or_add_channel(mc, CHANNEL_NAME, CHANNEL_KEY)
         print(f"Done. Channel '{CHANNEL_NAME}' is at slot {chan_idx}.")
         print(f"Set the same channel on your other device to start messaging.")
 
@@ -203,11 +218,11 @@ async def main():
             print("Usage: python main.py send <message>")
             sys.exit(1)
         message = " ".join(sys.argv[2:])
-        chan_idx = await find_or_add_channel(mc, CHANNEL_NAME)
+        chan_idx = await find_or_add_channel(mc, CHANNEL_NAME, CHANNEL_KEY)
         await send_mode(mc, chan_idx, message)
 
     elif cmd == "recv":
-        chan_idx = await find_or_add_channel(mc, CHANNEL_NAME)
+        chan_idx = await find_or_add_channel(mc, CHANNEL_NAME, CHANNEL_KEY)
         print(f"Channel '{CHANNEL_NAME}' is slot {chan_idx}")
         await receive_mode(mc, chan_idx)
 
@@ -221,7 +236,7 @@ async def main():
             print(f"ERROR: period must be a number, got {sys.argv[2]!r}")
             sys.exit(1)
         message = " ".join(sys.argv[3:])
-        chan_idx = await find_or_add_channel(mc, CHANNEL_NAME)
+        chan_idx = await find_or_add_channel(mc, CHANNEL_NAME, CHANNEL_KEY)
         await periodic_mode(mc, chan_idx, message, period)
 
     await mc.disconnect()
