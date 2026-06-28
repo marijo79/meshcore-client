@@ -1,0 +1,4 @@
+meshcore==2.3.7
+meshcore-cli==1.5.7
+pyserial==3.5
+pyserial-asyncio-fast==0.16
